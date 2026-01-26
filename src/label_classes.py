@@ -56,32 +56,26 @@ def make_binary(
     return out.dropna()
 
 
-def encode_labels(
-    y: pd.Series,
-    classes: Optional[List[str]] = None
-) -> Tuple[pd.Series, LabelEncoder]:
-    """
-    Encode labels to integers for ML models.
-
-    If classes is provided, encoding is stable and reproducible:
-      classes[0] -> 0, classes[1] -> 1, ...
-
-    Returns:
-      y_encoded: pd.Series aligned to y.index
-      encoder: fitted LabelEncoder
-    """
-    y = y.astype(str)
-
+def encode_labels(y: pd.Series, classes=None):
     le = LabelEncoder()
+
     if classes is not None:
         le.fit([str(c) for c in classes])
         unknown = sorted(set(y.unique()) - set(le.classes_))
         if unknown:
             raise ValueError(f"Found labels not in 'classes': {unknown}")
-        y_enc = pd.Series(le.transform(y), index=y.index, name=y.name)
+        y_enc = pd.Series(
+            le.transform(y.astype(str)),
+            index=y.index,          # ← THIS IS THE FIX
+            name=y.name,
+        )
         return y_enc, le
 
-    y_enc = pd.Series(le.fit_transform(y), index=y.index, name=y.name)
+    y_enc = pd.Series(
+        le.fit_transform(y.astype(str)),
+        index=y.index,              # ← AND HERE
+        name=y.name,
+    )
     return y_enc, le
 
 
