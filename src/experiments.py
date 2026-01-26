@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Literal, Tuple
+from typing import Any, Dict, List, Optional, Literal
 
 import pandas as pd
 from sklearn.pipeline import Pipeline
@@ -20,7 +20,7 @@ from src.evaluation import run_cv_experiment, run_nested_cv_experiment
 @dataclass(frozen=True)
 class Scenario:
     name: str
-    classes: List[str]  # stable order for encoding
+    classes: List[str]
 
     def apply(self, y: pd.Series) -> pd.Series:
         raise NotImplementedError
@@ -33,7 +33,6 @@ class Scenario4Classes(Scenario):
 
 class Scenario3Classes(Scenario):
     def apply(self, y: pd.Series) -> pd.Series:
-        # NP, RP kept; AIP+SIP merged as 'irreversible'
         y2 = y.astype(str).copy()
         y2 = merge_classes(y2, {"AIP": "irreversible", "SIP": "irreversible"})
         return y2
@@ -41,8 +40,6 @@ class Scenario3Classes(Scenario):
 
 class ScenarioBinary(Scenario):
     def apply(self, y: pd.Series) -> pd.Series:
-        # Example: drop NP, RP=reversible, AIP+SIP=irreversible
-        # Adjust to your true medical definition if needed.
         y2 = y.astype(str).copy()
         y2 = merge_classes(y2, {"AIP": "irreversible", "SIP": "irreversible"})
         y2 = drop_classes(y2, ["NP"])
@@ -65,13 +62,13 @@ def get_scenarios() -> List[Scenario]:
 
 
 # =========================
-# Model specs (fully generic)
+# Model specs
 # =========================
 
 @dataclass(frozen=True)
 class ModelSpec:
-    name: str                      # "rf", "xgboost", "svm", "logreg", ...
-    mode: Literal["fixed", "grid"] # fixed params or grid search
+    name: str
+    mode: Literal["fixed", "grid"]
     fixed_params: Optional[Dict[str, Any]] = None
     param_grid: Optional[Dict[str, List[Any]]] = None
 
@@ -89,15 +86,6 @@ def run_experiment_suite(
     preprocess_cfg: Optional[Dict[str, Any]] = None,
     use_nested_cv: bool = True,
 ) -> Dict[str, pd.DataFrame]:
-    """
-    Runs experiments for:
-      - selected datasets
-      - fixed 3 scenarios
-      - any models (fixed params and/or grid search)
-
-    Returns dict of DataFrames: {scenario_name: results_df}
-    Writes one CSV per scenario into output_dir.
-    """
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -116,17 +104,13 @@ def run_experiment_suite(
     for scenario in scenarios:
         rows = []
 
-        # 1) Apply label scenario
+        # ----- label handling -----
         y_s = scenario.apply(y_global)
-
-        # 2) Encode labels (integers), stable order
         y_enc, le = encode_labels(y_s, classes=scenario.classes)
         counts = class_counts(y_s)
 
         for ds_name in dataset_names:
             X = datasets[ds_name]
-
-            # If scenario dropped samples, filter X using index
             X_s = X.loc[y_enc.index]
 
             for spec in model_specs:
@@ -147,65 +131,67 @@ def run_experiment_suite(
                     "class_counts": counts.to_dict(),
                 }
 
+                # ----- choose evaluation engine -----
                 if use_nested_cv:
-                    # Nested CV:
-                    # - if spec.mode == "grid": inner loop does GridSearch
-                    # - if spec.mode == "fixed": inner loop is skipped (just evaluate fixed)
-                    if spec.mode == "grid":
-                        if not spec.param_grid:
-                            raise ValueError(f"ModelSpec '{spec.name}' is mode='grid' but param_grid is empty.")
-                        summary_df, fold_df = run_nested_cv_experiment(
-                            pipeline=pipe,
-                            X=X_s,
-                            y=y_enc,
-                            param_grid=_prefix_grid(spec.param_grid),
-                            experiment_metadata=metadata,
-                        )
-                    else:
-                        summary_df, fold_df = run_nested_cv_experiment(
-                            pipeline=pipe,
-                            X=X_s,
-                            y=y_enc,
-                            param_grid=None,
-                            experiment_metadata=metadata,
+                    param_grid = (
+                        _prefix_grid(spec.param_grid)
+                        if spec.mode == "grid"
+                        else None
+                    )
+
+                    if spec.mode == "grid" and not spec.param_grid:
+                        raise ValueError(
+                            f"ModelSpec '{spec.name}' is mode='grid' but param_grid is empty."
                         )
 
+                    summary_df, fold_df = run_nested_cv_experiment(
+                        pipeline=pipe,
+                        X=X_s,
+                        y=y_enc,
+                        param_grid=param_grid,
+                        experiment_metadata=metadata,
+                    )
+
                 else:
-                    # Non-nested CV (fast iteration)
-                    if spec.mode == "grid":
-                        if not spec.param_grid:
-                            raise ValueError(f"ModelSpec '{spec.name}' is mode='grid' but param_grid is empty.")
-                        summary_df, fold_df = run_cv_experiment(
-                            pipeline=pipe,
-                            X=X_s,
-                            y=y_enc,
-                            param_grid=_prefix_grid(spec.param_grid),
-                            experiment_metadata=metadata,
-                        )
-                    else:
-                        summary_df, fold_df = run_cv_experiment(
-                            pipeline=pipe,
-                            X=X_s,
-                            y=y_enc,
-                            param_grid=None,
-                            experiment_metadata=metadata,
-                        )
+                    param_grid = (
+                        _prefix_grid(spec.param_grid)
+                        if spec.mode == "grid"
+                        else None
+                    )
+
+                    summary_df, fold_df = run_cv_experiment(
+                        pipeline=pipe,
+                        X=X_s,
+                        y=y_enc,
+                        param_grid=param_grid,
+                        experiment_metadata=metadata,
+                    )
+
+                # ----- save fold-level data for reports.py -----
+                fold_path = (
+                    output_dir
+                    / f"folds__{scenario.name}__{ds_name}__{spec.name}.pkl"
+                )
+                fold_df.to_pickle(fold_path)
 
                 rows.append(summary_df)
 
         results_df = pd.concat(rows, ignore_index=True)
-        results_df.to_csv(output_dir / f"results__{scenario.name}.csv", index=False)
+        results_df.to_csv(
+            output_dir / f"results__{scenario.name}.csv",
+            index=False,
+        )
+
         scenario_results[scenario.name] = results_df
 
     return scenario_results
 
 
+# =========================
+# Helpers
+# =========================
+
 def _prefix_grid(param_grid: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
-    """
-    Convenience: allow user to write grids like {"n_estimators":[...]}
-    and we convert to sklearn Pipeline format: {"model__n_estimators":[...]}.
-    If user already uses "model__" keys, we keep them unchanged.
-    """
     out = {}
     for k, v in param_grid.items():
         if "__" in k:
