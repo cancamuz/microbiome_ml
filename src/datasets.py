@@ -36,8 +36,8 @@ def load_datasets(dataset_paths: Dict[str, str | Path]) -> Dict[str, pd.DataFram
 
 def load_labels(labels_path: str | Path) -> pd.Series:
     """
-    Load labels.csv with columns: sample, label.
-    Returns a Series of labels.
+    Load labels.csv with columns: sample, label (no header).
+    Returns a Series indexed by sample.
     """
     labels_path = Path(labels_path)
     labels_df = pd.read_csv(
@@ -45,4 +45,6 @@ def load_labels(labels_path: str | Path) -> pd.Series:
         header=None,
         names=["sample", "label"]
     )
-    return labels_df["label"]
+    labels_df["sample"] = labels_df["sample"].astype(str)
+    labels_df = labels_df.set_index("sample")
+    return labels_df["label"].astype(str)
