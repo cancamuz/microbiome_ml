@@ -91,12 +91,21 @@ def run_experiment_suite(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     preprocess_cfg = preprocess_cfg or {
-        "use_clr": True,
+        "transform": "clr",
         "use_scaler": True,
-        "k_features": 100,
+        "feature_selection": "mi",
+        "k_features": 50,
     }
 
-    preprocess = build_preprocessing_pipeline(**preprocess_cfg)
+    from src.preprocessing import PreprocessConfig
+
+    preprocess = build_preprocessing_pipeline(
+        PreprocessConfig(**preprocess_cfg)
+    )
+
+    #preprocess = build_preprocessing_pipeline(**preprocess_cfg)
+
+
     scenarios = get_scenarios()
 
     scenario_results: Dict[str, pd.DataFrame] = {}
